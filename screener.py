@@ -28,30 +28,20 @@ MAX_PRICE = 5000
 CHUNK_SIZE = 50
 SLEEP_TIME = 1
 
-# RR設定（超重要）
 STOP_LOSS = 0.98
-TAKE_PROFIT = 1.06   # RR=3
-
+TAKE_PROFIT = 1.06
 HOLD_DAYS = 10
 
-# ==============================
-# 🧠 スコア
-# ==============================
-def calc_score(win_rate, volume_ratio, high_ratio):
-    score = 0
-    score += win_rate * 50
-    score += min(volume_ratio * 10, 20)
-    score += high_ratio * 30
-    return score
+MIN_TRADES = 20   # ★重要
 
 # ==============================
-# 🤖 フィルター（緩め）
+# 🤖 フィルター
 # ==============================
 def ai_filter(volume_ratio, atr_ratio):
     return volume_ratio > 1.2 and atr_ratio > 0.015
 
 # ==============================
-# 📊 バックテスト関数（超重要）
+# 📊 バックテスト
 # ==============================
 def backtest(hist):
 
@@ -68,13 +58,13 @@ def backtest(hist):
         if pd.isna(ma20) or pd.isna(ma60):
             continue
 
-        # 押し目条件（改善ポイント）
+        # 押し目（追いかけ禁止）
         if not (price > ma20 > ma60):
             continue
 
         recent_high = hist["High"].rolling(20).max().iloc[i-1]
         if price > recent_high:
-            continue  # ★追いかけ禁止
+            continue
 
         vol_recent = hist["Volume"].iloc[i]
         vol_past = hist["Volume"].iloc[i-60:i-5].mean()
@@ -90,7 +80,6 @@ def backtest(hist):
         if not ai_filter(volume_ratio, atr_ratio):
             continue
 
-        # ===== トレード =====
         entry = price
         tp = entry * TAKE_PROFIT
         sl = entry * STOP_LOSS
@@ -108,7 +97,13 @@ def backtest(hist):
     total = wins + losses
     win_rate = (wins / total * 100) if total > 0 else 0
 
-    return win_rate, total
+    # RR
+    rr = (TAKE_PROFIT - 1) / (1 - STOP_LOSS)
+
+    # 期待値
+    expectancy = (win_rate/100 * rr) - (1 - win_rate/100)
+
+    return win_rate, total, expectancy
 
 # ==============================
 # 🔍 メイン
@@ -156,7 +151,7 @@ def run():
     print(f"取得成功銘柄数: {len(data)}")
 
     # ==============================
-    # 🔍 スクリーニング＋バックテスト
+    # 🔍 スクリーニング
     # ==============================
     candidates = []
 
@@ -172,10 +167,13 @@ def run():
             if not (MIN_PRICE <= price <= MAX_PRICE):
                 continue
 
-            # ===== 勝率計算 =====
-            win_rate, trades = backtest(hist)
+            # ===== 勝率＆期待値 =====
+            win_rate, trades, expectancy = backtest(hist)
 
-            if trades < 5:
+            if trades < MIN_TRADES:
+                continue
+
+            if expectancy <= 0:
                 continue
 
             # ===== 現在条件 =====
@@ -185,38 +183,44 @@ def run():
             if not (price > ma20 > ma60):
                 continue
 
-            vol_recent = hist["Volume"].iloc[-1]
-            vol_past = hist["Volume"].iloc[-60:-5].mean()
+            # ===== ロット計算 =====
+            stop_price = price * STOP_LOSS
+            risk_per_share = price - stop_price
+            risk_amount = INITIAL_CAPITAL * RISK_PER_TRADE
 
-            if pd.isna(vol_past) or vol_past == 0:
+            if risk_per_share <= 0:
                 continue
 
-            volume_ratio = vol_recent / vol_past
+            size = int(risk_amount / risk_per_share)
+            size = (size // 100) * 100
 
-            recent_high = hist["High"].rolling(20).max().iloc[-2]
-            high_ratio = price / recent_high
+            if size < 100:
+                continue
 
-            score = calc_score(win_rate, volume_ratio, high_ratio)
+            investment = size * price
 
             candidates.append({
                 "ticker": ticker,
                 "price": price,
                 "win_rate": win_rate,
-                "score": score
+                "expectancy": expectancy,
+                "trades": trades,
+                "size": size,
+                "investment": investment
             })
 
         except:
             continue
 
     if len(candidates) == 0:
-        msg = "⚠️ 該当銘柄なし"
+        msg = "⚠️ 条件に合う優良銘柄なし"
         print(msg)
         send_discord(msg)
         return
 
     # ===== 最強銘柄 =====
     df = pd.DataFrame(candidates)
-    df = df.sort_values("score", ascending=False)
+    df = df.sort_values("expectancy", ascending=False)
 
     best = df.iloc[0]
 
@@ -224,32 +228,23 @@ def run():
     stop_price = price * STOP_LOSS
     take_profit = price * TAKE_PROFIT
 
-    risk_amount = INITIAL_CAPITAL * RISK_PER_TRADE
-    risk_per_share = price - stop_price
-
-    if risk_per_share > 0:
-        size = int(risk_amount / risk_per_share)
-        size = (size // 100) * 100
-    else:
-        size = 0
-
-    investment = size * price
-
     # ==============================
     # 📢 出力
     # ==============================
     msg = f"""
-🔥最強1銘柄（勝率ベース）🔥
+🔥最強1銘柄（完全版）🔥
 銘柄: {best['ticker']}
 株価: {price:.1f}円
 
-株数: {size}
-投資額: {int(investment)}円
+株数: {best['size']}
+投資額: {int(best['investment'])}円
 
 損切り: {stop_price:.2f}
 利確: {take_profit:.2f}
 
 📊 勝率: {best['win_rate']:.2f}%
+📈 期待値: {best['expectancy']:.2f}
+📊 トレード数: {best['trades']}
 """
 
     print(msg)
