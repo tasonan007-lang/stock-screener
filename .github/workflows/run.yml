@@ -19,6 +19,7 @@ jobs:
 
       - name: ライブラリインストール
         run: |
+          pip install --upgrade pip
           pip install yfinance pandas numpy tqdm requests openpyxl xlrd
 
       - name: 実行
