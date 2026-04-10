@@ -28,8 +28,6 @@ MAX_PRICE = 5000
 CHUNK_SIZE = 50
 SLEEP_TIME = 1
 
-WINRATE_THRESHOLD = 35  # ★勝率フィルター
-
 # ==============================
 # 🧠 スコア
 # ==============================
@@ -46,6 +44,103 @@ def calc_score(price, ma20, ma60, volume_ratio, high_ratio):
 # ==============================
 def ai_filter(volume_ratio, high_ratio, atr_ratio):
     return volume_ratio > 1.8 and high_ratio >= 1.0 and atr_ratio > 0.02
+
+# ==============================
+# 📊 ガチバックテスト
+# ==============================
+def backtest_real(hist, initial_capital=100000):
+
+    capital = initial_capital
+    wins = 0
+    losses = 0
+    total_return = 0
+    trades = 0
+
+    for i in range(60, len(hist) - 15):
+
+        window = hist.iloc[:i]
+
+        price = window["Close"].iloc[-1]
+
+        ma20 = window["Close"].rolling(20).mean().iloc[-1]
+        ma60 = window["Close"].rolling(60).mean().iloc[-1]
+
+        if pd.isna(ma20) or pd.isna(ma60):
+            continue
+
+        if not (price > ma20 > ma60):
+            continue
+
+        vol_recent = window["Volume"].iloc[-1]
+        vol_past = window["Volume"].iloc[-60:-5].mean()
+
+        if pd.isna(vol_past) or vol_past == 0:
+            continue
+
+        volume_ratio = vol_recent / vol_past
+        if volume_ratio < 1.8:
+            continue
+
+        recent_high = window["High"].rolling(20).max().iloc[-2]
+        if pd.isna(recent_high):
+            continue
+
+        if not (recent_high * 0.99 <= price <= recent_high * 1.02):
+            continue
+
+        atr = (window["High"] - window["Low"]).rolling(14).mean().iloc[-1]
+        if pd.isna(atr):
+            continue
+
+        entry = price
+        stop = entry - atr
+        target = entry + atr * 2
+
+        risk_per_share = entry - stop
+        if risk_per_share <= 0:
+            continue
+
+        risk_amount = capital * 0.01
+        size = int(risk_amount / risk_per_share)
+        size = (size // 100) * 100
+
+        if size < 100:
+            continue
+
+        trades += 1
+
+        future = hist.iloc[i:i+14]
+
+        result = None
+
+        for _, row in future.iterrows():
+            if row["High"] >= target:
+                profit = (target - entry) * size
+                capital += profit
+                wins += 1
+                total_return += profit
+                result = "win"
+                break
+
+            if row["Low"] <= stop:
+                loss = (entry - stop) * size
+                capital -= loss
+                losses += 1
+                total_return -= loss
+                result = "loss"
+                break
+
+        if result is None:
+            pass
+
+        if capital <= 0:
+            break
+
+    total = wins + losses
+    win_rate = (wins / total * 100) if total > 0 else 0
+    expectancy = (total_return / trades) if trades > 0 else 0
+
+    return trades, win_rate, capital, expectancy
 
 # ==============================
 # 🔍 メイン
@@ -65,7 +160,6 @@ def run():
 
     print(f"銘柄数: {len(tickers)}")
 
-    # ===== データ取得 =====
     data = {}
     chunks = [tickers[i:i+CHUNK_SIZE] for i in range(0, len(tickers), CHUNK_SIZE)]
 
@@ -92,9 +186,7 @@ def run():
 
     print(f"取得成功銘柄数: {len(data)}")
 
-    # ==============================
-    # 🔍 スクリーニング
-    # ==============================
+    # ===== スクリーニング =====
     candidates = []
 
     for ticker in tqdm(data.keys()):
@@ -118,7 +210,6 @@ def run():
             if not (price > ma20 > ma60):
                 continue
 
-            # 出来高
             vol_recent = hist["Volume"].iloc[-1]
             vol_past = hist["Volume"].iloc[-60:-5].mean()
 
@@ -127,27 +218,14 @@ def run():
 
             volume_ratio = vol_recent / vol_past
 
-            # 高値
             recent_high = hist["High"].rolling(20).max().iloc[-2]
-            if pd.isna(recent_high):
-                continue
-
-            # ★初動ブレイクだけ
-            if not (recent_high * 0.99 <= price <= recent_high * 1.02):
+            if pd.isna(recent_high) or price <= recent_high:
                 continue
 
             high_ratio = price / recent_high
 
-            # ATR
             atr = (hist["High"] - hist["Low"]).rolling(14).mean().iloc[-1]
             atr_ratio = atr / price
-
-            # ★上ヒゲ除外
-            upper = hist["High"].iloc[-1] - hist["Close"].iloc[-1]
-            body = abs(hist["Close"].iloc[-1] - hist["Open"].iloc[-1])
-
-            if upper > body * 0.5:
-                continue
 
             if not ai_filter(volume_ratio, high_ratio, atr_ratio):
                 continue
@@ -182,58 +260,12 @@ def run():
     else:
         size = 0
 
-    # ★ロット不足対策
-    if size < 100:
-        msg = f"""
-⚠️ 見送り（ロット不足）
-銘柄: {best_ticker}
-株価: {price:.1f}
-"""
-        print(msg)
-        send_discord(msg)
-        return
-
     investment = size * price
 
-    # ==============================
-    # 📊 バックテスト（単発）
-    # ==============================
-    wins = 0
-    losses = 0
+    # ===== バックテスト =====
+    trades, win_rate, final_capital, expectancy = backtest_real(hist)
 
-    for i in range(60, len(hist) - 10):
-
-        entry = hist["Close"].iloc[i]
-        tp = entry * 1.05
-        sl = entry * 0.98
-
-        future = hist.iloc[i:i+10]
-
-        for _, row in future.iterrows():
-            if row["High"] >= tp:
-                wins += 1
-                break
-            if row["Low"] <= sl:
-                losses += 1
-                break
-
-    total = wins + losses
-    win_rate = (wins / total * 100) if total > 0 else 0
-
-    # ★勝率フィルター
-    if win_rate < WINRATE_THRESHOLD:
-        msg = f"""
-⚠️ 見送り（勝率低）
-銘柄: {best_ticker}
-勝率: {win_rate:.2f}%
-"""
-        print(msg)
-        send_discord(msg)
-        return
-
-    # ==============================
-    # 📢 出力
-    # ==============================
+    # ===== 出力 =====
     msg = f"""
 🔥最強1銘柄🔥
 銘柄: {best_ticker}
@@ -246,6 +278,8 @@ def run():
 利確: {take_profit:.2f}
 
 📊 勝率: {win_rate:.2f}%
+📈 期待値: {int(expectancy)}円
+💰 最終資金: {int(final_capital)}円
 """
 
     print(msg)
