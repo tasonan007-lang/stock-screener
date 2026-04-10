@@ -1,3 +1,5 @@
+これそのまま使える👇
+
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -8,12 +10,11 @@ import requests
 # ==============================
 # 🔑 Discord設定
 # ==============================
-WEBHOOK_URL = "https://discord.com/api/webhooks/1492203923157811230/OqAP-la9X9IaUhhR978c-Z62MEhpsrAYcTyoPH_wsZzlOyDCQyWJ7VmlphUYg5MAuEws"
+WEBHOOK_URL = "ここにWebhook"
 
 def send_discord(msg):
-    data = {"content": msg}
     try:
-        requests.post(WEBHOOK_URL, json=data)
+        requests.post(WEBHOOK_URL, json={"content": msg})
     except:
         print("Discord送信失敗")
 
@@ -23,8 +24,11 @@ def send_discord(msg):
 INITIAL_CAPITAL = 100000
 RISK_PER_TRADE = 0.01
 
+MIN_PRICE = 300     # ★追加：低価格除外
+MAX_PRICE = 5000
+
 CHUNK_SIZE = 50
-SLEEP_TIME = 0.8
+SLEEP_TIME = 1
 
 # ==============================
 # 🧠 スコア
@@ -38,30 +42,20 @@ def calc_score(price, ma20, ma60, volume_ratio, high_ratio):
     return score
 
 # ==============================
-# 🤖 AIフィルター
+# 🤖 フィルター
 # ==============================
 def ai_filter(volume_ratio, high_ratio, atr_ratio):
-
-    score = 0
-
-    if volume_ratio > 1.5:
-        score += 1
-    if high_ratio > 0.98:
-        score += 1
-    if atr_ratio > 0.02:
-        score += 1
-
-    return score >= 2
+    return volume_ratio > 1.5 and high_ratio >= 1.0 and atr_ratio > 0.02
 
 # ==============================
-# 🔍 メイン処理
+# 🔍 メイン
 # ==============================
-def run_screener():
+def run():
 
     print("銘柄取得中...")
 
     url = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
-    df = pd.read_excel(url, engine="xlrd")
+    df = pd.read_excel(url)
 
     codes = df["コード"].dropna().astype(str)
     codes = codes[codes.str.isdigit()]
@@ -79,7 +73,7 @@ def run_screener():
 
     for chunk in tqdm(chunks):
         try:
-            tmp = yf.download(chunk, period="3mo", group_by="ticker", progress=False, threads=False)
+            tmp = yf.download(chunk, period="6mo", group_by="ticker", progress=False, threads=False)
 
             if tmp is None or tmp.empty:
                 continue
@@ -98,7 +92,9 @@ def run_screener():
 
     print(f"取得成功銘柄数: {len(data)}")
 
-    # ===== スキャン =====
+    # ==============================
+    # 🔍 スクリーニング
+    # ==============================
     candidates = []
 
     for ticker in tqdm(data.keys()):
@@ -110,6 +106,10 @@ def run_screener():
 
             price = hist["Close"].iloc[-1]
 
+            # ★価格フィルター
+            if not (MIN_PRICE <= price <= MAX_PRICE):
+                continue
+
             ma20 = hist["Close"].rolling(20).mean().iloc[-1]
             ma60 = hist["Close"].rolling(60).mean().iloc[-1]
 
@@ -119,7 +119,6 @@ def run_screener():
             if not (price > ma20 > ma60):
                 continue
 
-            # 出来高
             vol_recent = hist["Volume"].iloc[-1]
             vol_past = hist["Volume"].iloc[-60:-5].mean()
 
@@ -128,90 +127,97 @@ def run_screener():
 
             volume_ratio = vol_recent / vol_past
 
-            # 高値ブレイク
             recent_high = hist["High"].rolling(20).max().iloc[-2]
             if pd.isna(recent_high) or price <= recent_high:
                 continue
 
             high_ratio = price / recent_high
 
-            # ATR
             atr = (hist["High"] - hist["Low"]).rolling(14).mean().iloc[-1]
             atr_ratio = atr / price
-
-            # 上ヒゲ除外
-            upper_shadow = hist["High"].iloc[-1] - hist["Close"].iloc[-1]
-            body = abs(hist["Close"].iloc[-1] - hist["Open"].iloc[-1])
-            if upper_shadow > body:
-                continue
 
             if not ai_filter(volume_ratio, high_ratio, atr_ratio):
                 continue
 
             score = calc_score(price, ma20, ma60, volume_ratio, high_ratio)
 
-            candidates.append({
-                "ticker": ticker,
-                "price": price,
-                "score": score,
-                "volume_ratio": volume_ratio,
-                "high_ratio": high_ratio,
-                "atr_ratio": atr_ratio
-            })
+            candidates.append((ticker, score))
 
         except:
             continue
 
-    # ===== 結果 =====
     if len(candidates) == 0:
-        msg = "⚠️ 今日の該当銘柄なし"
+        msg = "⚠️ 該当銘柄なし"
         print(msg)
         send_discord(msg)
         return
 
-    df = pd.DataFrame(candidates)
-    df = df.sort_values("score", ascending=False)
+    # ===== 最強1銘柄 =====
+    best_ticker = sorted(candidates, key=lambda x: x[1], reverse=True)[0][0]
+    hist = data[best_ticker]
 
-    best = df.iloc[0]
-
-    price = best["price"]
+    price = hist["Close"].iloc[-1]
     stop_price = price * 0.98
     take_profit = price * 1.05
 
-    # ロット計算
     risk_amount = INITIAL_CAPITAL * RISK_PER_TRADE
     risk_per_share = price - stop_price
 
     if risk_per_share > 0:
-        raw_size = int(risk_amount / risk_per_share)
-        position_size = (raw_size // 200) * 200
+        size = int(risk_amount / risk_per_share)
+        size = (size // 100) * 100
     else:
-        position_size = 0
+        size = 0
 
-    investment = position_size * price
+    investment = size * price
 
+    # ==============================
+    # 📊 バックテスト（その銘柄だけ）
+    # ==============================
+    wins = 0
+    losses = 0
+
+    for i in range(60, len(hist) - 10):
+
+        entry = hist["Close"].iloc[i]
+        tp = entry * 1.05
+        sl = entry * 0.98
+
+        future = hist.iloc[i:i+10]
+
+        for _, row in future.iterrows():
+            if row["High"] >= tp:
+                wins += 1
+                break
+            if row["Low"] <= sl:
+                losses += 1
+                break
+
+    total = wins + losses
+    win_rate = (wins / total * 100) if total > 0 else 0
+
+    # ==============================
+    # 📢 出力
+    # ==============================
     msg = f"""
-🔥今日の最強1銘柄🔥
-銘柄: {best['ticker']}
+🔥最強1銘柄🔥
+銘柄: {best_ticker}
 株価: {price:.1f}円
 
-株数: {position_size}
+株数: {size}
 投資額: {int(investment)}円
 
 損切り: {stop_price:.2f}
 利確: {take_profit:.2f}
 
-スコア: {best['score']:.2f}
-出来高倍率: {best['volume_ratio']:.2f}
-高値位置: {best['high_ratio']:.3f}
-ボラ: {best['atr_ratio']:.3f}
+📊 勝率: {win_rate:.2f}%
 """
 
     print(msg)
     send_discord(msg)
 
 # ==============================
-# 🚀 実行（これが重要）
+# 🚀 実行
 # ==============================
 if __name__ == "__main__":
-    run_screener()
+    run()
