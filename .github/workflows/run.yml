@@ -22,4 +22,4 @@ jobs:
           pip install yfinance pandas numpy tqdm requests openpyxl
 
       - name: 実行
-        run: python スクリーナー.py
+        run: python screener.py
