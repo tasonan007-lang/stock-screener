@@ -24,7 +24,7 @@ INITIAL_CAPITAL = 100000
 RISK_PER_TRADE = 0.01
 
 CHUNK_SIZE = 50
-SLEEP_TIME = 1
+SLEEP_TIME = 0.8
 
 # ==============================
 # 🧠 スコア
@@ -41,7 +41,17 @@ def calc_score(price, ma20, ma60, volume_ratio, high_ratio):
 # 🤖 AIフィルター
 # ==============================
 def ai_filter(volume_ratio, high_ratio, atr_ratio):
-    return volume_ratio > 2.0 and high_ratio >= 1.0 and atr_ratio > 0.025
+
+    score = 0
+
+    if volume_ratio > 1.5:
+        score += 1
+    if high_ratio > 0.98:
+        score += 1
+    if atr_ratio > 0.02:
+        score += 1
+
+    return score >= 2
 
 # ==============================
 # 🔍 メイン処理
@@ -174,7 +184,7 @@ def run_screener():
 
     if risk_per_share > 0:
         raw_size = int(risk_amount / risk_per_share)
-        position_size = (raw_size // 100) * 100
+        position_size = (raw_size // 200) * 200
     else:
         position_size = 0
 
