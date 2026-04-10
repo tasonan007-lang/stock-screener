@@ -51,7 +51,7 @@ def run_screener():
     print("銘柄取得中...")
 
     url = "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls"
-    df = pd.read_excel(url)
+    df = pd.read_excel(url, engine="xlrd")
 
     codes = df["コード"].dropna().astype(str)
     codes = codes[codes.str.isdigit()]
