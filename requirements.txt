@@ -1,0 +1,8 @@
+pandas
+yfinance
+numpy
+tqdm
+requests
+schedule
+openpyxl
+xlrd
