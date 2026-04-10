@@ -28,7 +28,7 @@ MAX_PRICE = 5000
 CHUNK_SIZE = 50
 SLEEP_TIME = 1
 
-WINRATE_THRESHOLD = 30  # ★勝率フィルター
+WINRATE_THRESHOLD = 35  # ★勝率フィルター
 
 # ==============================
 # 🧠 スコア
@@ -45,7 +45,7 @@ def calc_score(price, ma20, ma60, volume_ratio, high_ratio):
 # 🤖 フィルター
 # ==============================
 def ai_filter(volume_ratio, high_ratio, atr_ratio):
-    return volume_ratio > 1.5 and high_ratio >= 1.0 and atr_ratio > 0.02
+    return volume_ratio > 1.8 and high_ratio >= 1.0 and atr_ratio > 0.02
 
 # ==============================
 # 🔍 メイン
@@ -171,7 +171,7 @@ def run():
 
     price = hist["Close"].iloc[-1]
     stop_price = price * 0.98
-    take_profit = price * 1.05
+    take_profit = price * 1.06
 
     risk_amount = INITIAL_CAPITAL * RISK_PER_TRADE
     risk_per_share = price - stop_price
