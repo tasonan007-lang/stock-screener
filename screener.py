@@ -8,7 +8,7 @@ import requests
 # ==============================
 # 🔑 Discord設定
 # ==============================
-WEBHOOK_URL = "ここにWebhook"
+WEBHOOK_URL = "https://discord.com/api/webhooks/1492203923157811230/OqAP-la9X9IaUhhR978c-Z62MEhpsrAYcTyoPH_wsZzlOyDCQyWJ7VmlphUYg5MAuEws"
 
 def send_discord(msg):
     try:
