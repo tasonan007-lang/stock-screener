@@ -22,11 +22,13 @@ def send_discord(msg):
 INITIAL_CAPITAL = 100000
 RISK_PER_TRADE = 0.01
 
-MIN_PRICE = 300     # ★追加：低価格除外
+MIN_PRICE = 300
 MAX_PRICE = 5000
 
 CHUNK_SIZE = 50
 SLEEP_TIME = 1
+
+WINRATE_THRESHOLD = 30  # ★勝率フィルター
 
 # ==============================
 # 🧠 スコア
@@ -104,7 +106,6 @@ def run():
 
             price = hist["Close"].iloc[-1]
 
-            # ★価格フィルター
             if not (MIN_PRICE <= price <= MAX_PRICE):
                 continue
 
@@ -117,6 +118,7 @@ def run():
             if not (price > ma20 > ma60):
                 continue
 
+            # 出来高
             vol_recent = hist["Volume"].iloc[-1]
             vol_past = hist["Volume"].iloc[-60:-5].mean()
 
@@ -125,14 +127,27 @@ def run():
 
             volume_ratio = vol_recent / vol_past
 
+            # 高値
             recent_high = hist["High"].rolling(20).max().iloc[-2]
-            if pd.isna(recent_high) or price <= recent_high:
+            if pd.isna(recent_high):
+                continue
+
+            # ★初動ブレイクだけ
+            if not (recent_high * 0.99 <= price <= recent_high * 1.02):
                 continue
 
             high_ratio = price / recent_high
 
+            # ATR
             atr = (hist["High"] - hist["Low"]).rolling(14).mean().iloc[-1]
             atr_ratio = atr / price
+
+            # ★上ヒゲ除外
+            upper = hist["High"].iloc[-1] - hist["Close"].iloc[-1]
+            body = abs(hist["Close"].iloc[-1] - hist["Open"].iloc[-1])
+
+            if upper > body * 0.5:
+                continue
 
             if not ai_filter(volume_ratio, high_ratio, atr_ratio):
                 continue
@@ -167,10 +182,21 @@ def run():
     else:
         size = 0
 
+    # ★ロット不足対策
+    if size < 100:
+        msg = f"""
+⚠️ 見送り（ロット不足）
+銘柄: {best_ticker}
+株価: {price:.1f}
+"""
+        print(msg)
+        send_discord(msg)
+        return
+
     investment = size * price
 
     # ==============================
-    # 📊 バックテスト（その銘柄だけ）
+    # 📊 バックテスト（単発）
     # ==============================
     wins = 0
     losses = 0
@@ -193,6 +219,17 @@ def run():
 
     total = wins + losses
     win_rate = (wins / total * 100) if total > 0 else 0
+
+    # ★勝率フィルター
+    if win_rate < WINRATE_THRESHOLD:
+        msg = f"""
+⚠️ 見送り（勝率低）
+銘柄: {best_ticker}
+勝率: {win_rate:.2f}%
+"""
+        print(msg)
+        send_discord(msg)
+        return
 
     # ==============================
     # 📢 出力
