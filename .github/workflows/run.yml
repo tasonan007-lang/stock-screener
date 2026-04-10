@@ -19,7 +19,7 @@ jobs:
 
       - name: ライブラリインストール
         run: |
-          pip install yfinance pandas numpy tqdm requests schedule openpyxl
+          pip install yfinance pandas numpy tqdm requests openpyxl xlrd
 
       - name: 実行
         run: python screener.py
