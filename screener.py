@@ -19,10 +19,10 @@ def send_discord(msg):
 # ==============================
 # ⚙️ 設定
 # ==============================
-INITIAL_CAPITAL = 100000
+INITIAL_CAPITAL = 200000
 RISK_PER_TRADE = 0.01
 
-MIN_PRICE = 300
+MIN_PRICE = 50
 MAX_PRICE = 5000
 
 CHUNK_SIZE = 50
