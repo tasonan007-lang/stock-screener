@@ -30,6 +30,8 @@ SLEEP_TIME = 1
 
 MIN_WIN_RATE = 40
 MIN_EXPECTANCY = 1.2
+MIN_PF = 1.3
+MIN_RR = 1.5
 
 # ==============================
 # 📈 地合い
@@ -57,12 +59,11 @@ def ai_filter(volume_ratio, high_ratio, atr_ratio):
     return volume_ratio > 1.5 and high_ratio >= 0.97 and atr_ratio > 0.02
 
 # ==============================
-# 📊 バックテスト
+# 📊 改良バックテスト（リアルRR）
 # ==============================
 def backtest(hist):
-    wins = 0
-    losses = 0
-    total_profit = 0
+
+    trades = []
 
     for i in range(60, len(hist) - 10):
 
@@ -72,24 +73,45 @@ def backtest(hist):
 
         future = hist.iloc[i:i+10]
 
+        exit_price = None
+
         for _, row in future.iterrows():
             if row["High"] >= tp:
-                wins += 1
-                total_profit += (tp - entry)
+                exit_price = tp
                 break
             if row["Low"] <= sl:
-                losses += 1
-                total_profit += (sl - entry)
+                exit_price = sl
                 break
 
-    total = wins + losses
-    if total == 0:
-        return 0, 0, 0
+        if exit_price is None:
+            continue
 
-    win_rate = wins / total * 100
-    expectancy = total_profit / total
+        pnl = exit_price - entry
+        trades.append(pnl)
 
-    return win_rate, expectancy, total
+    if len(trades) == 0:
+        return 0, 0, 0, 0, 0, 0, 0
+
+    df = pd.Series(trades)
+
+    wins = df[df > 0]
+    losses = df[df < 0]
+
+    total = len(df)
+    win_rate = len(wins) / total * 100
+
+    avg_profit = wins.mean() if len(wins) > 0 else 0
+    avg_loss = losses.mean() if len(losses) > 0 else 0
+
+    real_rr = abs(avg_profit / avg_loss) if avg_loss != 0 else 0
+
+    expectancy = df.mean()
+
+    gross_profit = wins.sum()
+    gross_loss = abs(losses.sum())
+    pf = gross_profit / gross_loss if gross_loss != 0 else 0
+
+    return win_rate, expectancy, total, real_rr, avg_profit, avg_loss, pf
 
 # ==============================
 # 🚀 メイン
@@ -190,7 +212,7 @@ def run():
             if vol_prev < vol_past:
                 continue
 
-            # ===== ブレイク or 押し目 =====
+            # ブレイク or 押し目
             recent_high = hist["High"].rolling(20).max().iloc[-5]
             if pd.isna(recent_high):
                 continue
@@ -211,7 +233,7 @@ def run():
             if not ai_filter(volume_ratio, high_ratio, atr_ratio):
                 continue
 
-            # ===== エントリータイプ＆価格 =====
+            # エントリー
             if is_breakout:
                 entry_type = "ブレイク"
                 entry_price = price
@@ -220,15 +242,17 @@ def run():
                 entry_price = ma20 * 0.995
 
             # ===== バックテスト =====
-            win_rate, expectancy, trades = backtest(hist)
+            win_rate, expectancy, trades, real_rr, avg_profit, avg_loss, pf = backtest(hist)
 
             if trades < 5:
                 continue
-
             if win_rate < MIN_WIN_RATE:
                 continue
-
             if expectancy < MIN_EXPECTANCY:
+                continue
+            if pf < MIN_PF:
+                continue
+            if real_rr < MIN_RR:
                 continue
 
             results.append({
@@ -238,7 +262,11 @@ def run():
                 "entry_price": entry_price,
                 "win_rate": win_rate,
                 "expectancy": expectancy,
-                "trades": trades
+                "trades": trades,
+                "real_rr": real_rr,
+                "avg_profit": avg_profit,
+                "avg_loss": avg_loss,
+                "pf": pf
             })
 
         except:
@@ -251,7 +279,7 @@ def run():
         return
 
     df = pd.DataFrame(results)
-    df = df.sort_values(["win_rate", "expectancy"], ascending=False)
+    df = df.sort_values(["expectancy", "pf"], ascending=False)
 
     # ==============================
     # 📢 出力
@@ -293,6 +321,11 @@ def run():
 📊 勝率: {row['win_rate']:.1f}%
 📈 期待値: {row['expectancy']:.2f}
 📊 トレード数: {row['trades']}
+
+📊 リアルRR: {row['real_rr']:.2f}
+💰 平均利益: {row['avg_profit']:.2f}
+💸 平均損失: {row['avg_loss']:.2f}
+📊 PF: {row['pf']:.2f}
 """
 
     print(msg)
