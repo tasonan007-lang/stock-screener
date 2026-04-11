@@ -19,7 +19,7 @@ def send_discord(msg):
 # ==============================
 # ⚙️ 設定
 # ==============================
-INITIAL_CAPITAL = 100000
+INITIAL_CAPITAL = 200000
 RISK_PER_TRADE = 0.01
 
 MIN_PRICE = 300
@@ -27,6 +27,9 @@ MAX_PRICE = 5000
 
 CHUNK_SIZE = 50
 SLEEP_TIME = 1
+
+MIN_WIN_RATE = 40      # ★追加
+MIN_EXPECTANCY = 1.2   # ★追加
 
 # ==============================
 # 🤖 フィルター
@@ -71,9 +74,31 @@ def backtest(hist):
     return win_rate, expectancy, total
 
 # ==============================
+# 📈 地合いフィルター（日経）
+# ==============================
+def market_ok():
+    nikkei = yf.download("^N225", period="5d", progress=False)
+
+    if len(nikkei) < 2:
+        return False
+
+    today = nikkei["Close"].iloc[-1]
+    yesterday = nikkei["Close"].iloc[-2]
+
+    return today > yesterday  # 上昇してる日だけ
+
+# ==============================
 # 🚀 メイン
 # ==============================
 def run():
+
+    print("地合いチェック中...")
+
+    if not market_ok():
+        msg = "⚠️ 地合いNG（日経↓）トレード回避"
+        print(msg)
+        send_discord(msg)
+        return
 
     print("銘柄取得中...")
 
@@ -132,6 +157,13 @@ def run():
             if not (MIN_PRICE <= price <= MAX_PRICE):
                 continue
 
+            # ===== ギャップアップ除外 =====
+            open_price = hist["Open"].iloc[-1]
+            prev_close = hist["Close"].iloc[-2]
+
+            if open_price > prev_close * 1.03:
+                continue
+
             ma20 = hist["Close"].rolling(20).mean().iloc[-1]
             ma60 = hist["Close"].rolling(60).mean().iloc[-1]
 
@@ -141,7 +173,9 @@ def run():
             if not (price > ma20 > ma60):
                 continue
 
+            # ===== 出来高強化 =====
             vol_recent = hist["Volume"].iloc[-1]
+            vol_prev = hist["Volume"].iloc[-2]
             vol_past = hist["Volume"].iloc[-60:-5].mean()
 
             if pd.isna(vol_past) or vol_past == 0:
@@ -149,8 +183,13 @@ def run():
 
             volume_ratio = vol_recent / vol_past
 
+            # ★前日も出来高増えてる
+            if vol_prev < vol_past:
+                continue
+
+            # ===== 高値ブレイク =====
             recent_high = hist["High"].rolling(20).max().iloc[-2]
-            if pd.isna(recent_high) or price <= recent_high:
+            if price <= recent_high:
                 continue
 
             high_ratio = price / recent_high
@@ -165,6 +204,13 @@ def run():
             win_rate, expectancy, trades = backtest(hist)
 
             if trades < 5:
+                continue
+
+            # ★勝率＆期待値フィルター
+            if win_rate < MIN_WIN_RATE:
+                continue
+
+            if expectancy < MIN_EXPECTANCY:
                 continue
 
             results.append({
@@ -185,24 +231,18 @@ def run():
         return
 
     df = pd.DataFrame(results)
-
-    # ★勝率ベースで並び替え（ここ変えれば期待値順にもできる）
     df = df.sort_values(["win_rate", "expectancy"], ascending=False)
 
     # ==============================
     # 📢 出力（TOP3）
     # ==============================
-    msg = "🔥本日の有望銘柄TOP3🔥\n\n"
+    msg = "🔥最終強化版：有望銘柄TOP3🔥\n"
 
     for _, row in df.head(3).iterrows():
 
         ticker = row["ticker"]
         price = row["price"]
-        win_rate = row["win_rate"]
-        expectancy = row["expectancy"]
-        trades = row["trades"]
 
-        # ===== ロット計算 =====
         stop_price = price * 0.98
         take_profit = price * 1.05
 
@@ -228,9 +268,9 @@ def run():
 損切り: {stop_price:.2f}
 利確: {take_profit:.2f}
 
-📊 勝率: {win_rate:.1f}%
-📈 期待値: {expectancy:.2f}
-📊 トレード数: {trades}
+📊 勝率: {row['win_rate']:.1f}%
+📈 期待値: {row['expectancy']:.2f}
+📊 トレード数: {row['trades']}
 """
 
     print(msg)
