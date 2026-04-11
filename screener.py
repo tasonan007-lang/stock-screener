@@ -32,7 +32,7 @@ MIN_WIN_RATE = 40
 MIN_EXPECTANCY = 1.2
 
 # ==============================
-# 📈 地合いフィルター（修正版）
+# 📈 地合いフィルター（安定版）
 # ==============================
 def market_ok():
     try:
@@ -49,10 +49,7 @@ def market_ok():
         if len(close) < 2:
             return False
 
-        today = float(close.iloc[-1])
-        yesterday = float(close.iloc[-2])
-
-        return today > yesterday
+        return float(close.iloc[-1]) > float(close.iloc[-2])
 
     except:
         return False
@@ -61,7 +58,7 @@ def market_ok():
 # 🤖 フィルター
 # ==============================
 def ai_filter(volume_ratio, high_ratio, atr_ratio):
-    return volume_ratio > 1.5 and high_ratio >= 1.0 and atr_ratio > 0.02
+    return volume_ratio > 1.5 and high_ratio >= 0.97 and atr_ratio > 0.02
 
 # ==============================
 # 📊 バックテスト
@@ -125,9 +122,7 @@ def run():
 
     print(f"銘柄数: {len(tickers)}")
 
-    # ==============================
-    # データ取得
-    # ==============================
+    # ===== データ取得 =====
     data = {}
     chunks = [tickers[i:i+CHUNK_SIZE] for i in range(0, len(tickers), CHUNK_SIZE)]
 
@@ -155,7 +150,7 @@ def run():
     print(f"取得成功銘柄数: {len(data)}")
 
     # ==============================
-    # スクリーニング
+    # 🔍 スクリーニング
     # ==============================
     results = []
 
@@ -171,13 +166,14 @@ def run():
             if not (MIN_PRICE <= price <= MAX_PRICE):
                 continue
 
-            # ギャップ除外
+            # ===== ギャップ除外 =====
             open_price = hist["Open"].iloc[-1]
             prev_close = hist["Close"].iloc[-2]
 
             if open_price > prev_close * 1.03:
                 continue
 
+            # ===== トレンド =====
             ma20 = hist["Close"].rolling(20).mean().iloc[-1]
             ma60 = hist["Close"].rolling(60).mean().iloc[-1]
 
@@ -187,7 +183,7 @@ def run():
             if not (price > ma20 > ma60):
                 continue
 
-            # 出来高
+            # ===== 出来高 =====
             vol_recent = hist["Volume"].iloc[-1]
             vol_prev = hist["Volume"].iloc[-2]
             vol_past = hist["Volume"].iloc[-60:-5].mean()
@@ -200,21 +196,34 @@ def run():
             if vol_prev < vol_past:
                 continue
 
-            # 高値ブレイク
-            recent_high = hist["High"].rolling(20).max().iloc[-2]
-            if price <= recent_high:
+            # ==============================
+            # 🔥 ハイブリッド（ブレイク＋押し目）
+            # ==============================
+            recent_high = hist["High"].rolling(20).max().iloc[-5]
+
+            if pd.isna(recent_high):
                 continue
 
             high_ratio = price / recent_high
 
-            # ATR
+            # ブレイク
+            is_breakout = price > recent_high * 0.99
+
+            # 押し目
+            pullback = abs(price - ma20) / ma20
+            is_pullback = (price < recent_high and pullback < 0.03)
+
+            if not (is_breakout or is_pullback):
+                continue
+
+            # ===== ATR =====
             atr = (hist["High"] - hist["Low"]).rolling(14).mean().iloc[-1]
             atr_ratio = atr / price
 
             if not ai_filter(volume_ratio, high_ratio, atr_ratio):
                 continue
 
-            # バックテスト
+            # ===== バックテスト =====
             win_rate, expectancy, trades = backtest(hist)
 
             if trades < 5:
@@ -247,9 +256,9 @@ def run():
     df = df.sort_values(["win_rate", "expectancy"], ascending=False)
 
     # ==============================
-    # 出力
+    # 📢 出力
     # ==============================
-    msg = "🔥最強銘柄TOP3🔥\n"
+    msg = "🔥最強銘柄TOP3（ハイブリッド）🔥\n"
 
     for _, row in df.head(3).iterrows():
 
