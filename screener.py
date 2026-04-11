@@ -25,14 +25,16 @@ RISK_PER_TRADE = 0.01
 MIN_PRICE = 300
 MAX_PRICE = 5000
 
-CHUNK_SIZE = 50
-SLEEP_TIME = 1
-
 STOP_LOSS = 0.98
 TAKE_PROFIT = 1.06
 HOLD_DAYS = 10
 
-MIN_TRADES = 20   # ★重要
+MIN_TRADES = 10  # ←少し緩め
+
+TOP_N = 3  # ←これが最重要🔥
+
+CHUNK_SIZE = 50
+SLEEP_TIME = 1
 
 # ==============================
 # 🤖 フィルター
@@ -58,7 +60,7 @@ def backtest(hist):
         if pd.isna(ma20) or pd.isna(ma60):
             continue
 
-        # 押し目（追いかけ禁止）
+        # 押し目
         if not (price > ma20 > ma60):
             continue
 
@@ -97,10 +99,7 @@ def backtest(hist):
     total = wins + losses
     win_rate = (wins / total * 100) if total > 0 else 0
 
-    # RR
     rr = (TAKE_PROFIT - 1) / (1 - STOP_LOSS)
-
-    # 期待値
     expectancy = (win_rate/100 * rr) - (1 - win_rate/100)
 
     return win_rate, total, expectancy
@@ -167,23 +166,22 @@ def run():
             if not (MIN_PRICE <= price <= MAX_PRICE):
                 continue
 
-            # ===== 勝率＆期待値 =====
             win_rate, trades, expectancy = backtest(hist)
 
             if trades < MIN_TRADES:
                 continue
 
-            if expectancy <= 0:
+            if expectancy <= -0.1:
                 continue
 
-            # ===== 現在条件 =====
+            # 現在トレンド
             ma20 = hist["Close"].rolling(20).mean().iloc[-1]
             ma60 = hist["Close"].rolling(60).mean().iloc[-1]
 
             if not (price > ma20 > ma60):
                 continue
 
-            # ===== ロット計算 =====
+            # ロット計算
             stop_price = price * STOP_LOSS
             risk_per_share = price - stop_price
             risk_amount = INITIAL_CAPITAL * RISK_PER_TRADE
@@ -195,7 +193,7 @@ def run():
             size = (size // 100) * 100
 
             if size < 100:
-                continue
+                size = 100  # ★強制エントリー
 
             investment = size * price
 
@@ -213,38 +211,34 @@ def run():
             continue
 
     if len(candidates) == 0:
-        msg = "⚠️ 条件に合う優良銘柄なし"
+        msg = "⚠️ 条件に合う銘柄なし（正常）"
         print(msg)
         send_discord(msg)
         return
 
-    # ===== 最強銘柄 =====
+    # ===== 上位N銘柄 =====
     df = pd.DataFrame(candidates)
-    df = df.sort_values("expectancy", ascending=False)
-
-    best = df.iloc[0]
-
-    price = best["price"]
-    stop_price = price * STOP_LOSS
-    take_profit = price * TAKE_PROFIT
+    df = df.sort_values("expectancy", ascending=False).head(TOP_N)
 
     # ==============================
     # 📢 出力
     # ==============================
-    msg = f"""
-🔥最強1銘柄（完全版）🔥
-銘柄: {best['ticker']}
-株価: {price:.1f}円
+    msg = "🔥本日の有望銘柄TOP3🔥\n"
 
-株数: {best['size']}
-投資額: {int(best['investment'])}円
+    split_capital = INITIAL_CAPITAL / TOP_N
 
-損切り: {stop_price:.2f}
-利確: {take_profit:.2f}
+    for i, row in df.iterrows():
+        msg += f"""
+------------------------
+銘柄: {row['ticker']}
+株価: {row['price']:.1f}円
 
-📊 勝率: {best['win_rate']:.2f}%
-📈 期待値: {best['expectancy']:.2f}
-📊 トレード数: {best['trades']}
+株数: {row['size']}
+投資額: {int(row['investment'])}円
+
+📊 勝率: {row['win_rate']:.1f}%
+📈 期待値: {row['expectancy']:.2f}
+📊 トレード数: {row['trades']}
 """
 
     print(msg)
