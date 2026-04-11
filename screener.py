@@ -19,7 +19,7 @@ def send_discord(msg):
 # ==============================
 # ⚙️ 設定
 # ==============================
-INITIAL_CAPITAL = 200000
+INITIAL_CAPITAL = 100000
 RISK_PER_TRADE = 0.01
 
 MIN_PRICE = 300
@@ -28,8 +28,34 @@ MAX_PRICE = 5000
 CHUNK_SIZE = 50
 SLEEP_TIME = 1
 
-MIN_WIN_RATE = 40      # ★追加
-MIN_EXPECTANCY = 1.2   # ★追加
+MIN_WIN_RATE = 40
+MIN_EXPECTANCY = 1.2
+
+# ==============================
+# 📈 地合いフィルター（修正版）
+# ==============================
+def market_ok():
+    try:
+        nikkei = yf.download("^N225", period="5d", progress=False)
+
+        if nikkei is None or nikkei.empty:
+            return False
+
+        close = nikkei["Close"]
+
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+
+        if len(close) < 2:
+            return False
+
+        today = float(close.iloc[-1])
+        yesterday = float(close.iloc[-2])
+
+        return today > yesterday
+
+    except:
+        return False
 
 # ==============================
 # 🤖 フィルター
@@ -74,20 +100,6 @@ def backtest(hist):
     return win_rate, expectancy, total
 
 # ==============================
-# 📈 地合いフィルター（日経）
-# ==============================
-def market_ok():
-    nikkei = yf.download("^N225", period="5d", progress=False)
-
-    if len(nikkei) < 2:
-        return False
-
-    today = nikkei["Close"].iloc[-1]
-    yesterday = nikkei["Close"].iloc[-2]
-
-    return today > yesterday  # 上昇してる日だけ
-
-# ==============================
 # 🚀 メイン
 # ==============================
 def run():
@@ -95,7 +107,7 @@ def run():
     print("地合いチェック中...")
 
     if not market_ok():
-        msg = "⚠️ 地合いNG（日経↓）トレード回避"
+        msg = "⚠️ 地合いNG（トレード回避）"
         print(msg)
         send_discord(msg)
         return
@@ -113,7 +125,9 @@ def run():
 
     print(f"銘柄数: {len(tickers)}")
 
-    # ===== データ取得 =====
+    # ==============================
+    # データ取得
+    # ==============================
     data = {}
     chunks = [tickers[i:i+CHUNK_SIZE] for i in range(0, len(tickers), CHUNK_SIZE)]
 
@@ -141,7 +155,7 @@ def run():
     print(f"取得成功銘柄数: {len(data)}")
 
     # ==============================
-    # 🔍 スクリーニング
+    # スクリーニング
     # ==============================
     results = []
 
@@ -157,7 +171,7 @@ def run():
             if not (MIN_PRICE <= price <= MAX_PRICE):
                 continue
 
-            # ===== ギャップアップ除外 =====
+            # ギャップ除外
             open_price = hist["Open"].iloc[-1]
             prev_close = hist["Close"].iloc[-2]
 
@@ -173,7 +187,7 @@ def run():
             if not (price > ma20 > ma60):
                 continue
 
-            # ===== 出来高強化 =====
+            # 出来高
             vol_recent = hist["Volume"].iloc[-1]
             vol_prev = hist["Volume"].iloc[-2]
             vol_past = hist["Volume"].iloc[-60:-5].mean()
@@ -183,30 +197,29 @@ def run():
 
             volume_ratio = vol_recent / vol_past
 
-            # ★前日も出来高増えてる
             if vol_prev < vol_past:
                 continue
 
-            # ===== 高値ブレイク =====
+            # 高値ブレイク
             recent_high = hist["High"].rolling(20).max().iloc[-2]
             if price <= recent_high:
                 continue
 
             high_ratio = price / recent_high
 
+            # ATR
             atr = (hist["High"] - hist["Low"]).rolling(14).mean().iloc[-1]
             atr_ratio = atr / price
 
             if not ai_filter(volume_ratio, high_ratio, atr_ratio):
                 continue
 
-            # ===== バックテスト =====
+            # バックテスト
             win_rate, expectancy, trades = backtest(hist)
 
             if trades < 5:
                 continue
 
-            # ★勝率＆期待値フィルター
             if win_rate < MIN_WIN_RATE:
                 continue
 
@@ -225,7 +238,7 @@ def run():
             continue
 
     if len(results) == 0:
-        msg = "⚠️ 条件に合う優良銘柄なし"
+        msg = "⚠️ 優良銘柄なし"
         print(msg)
         send_discord(msg)
         return
@@ -234,9 +247,9 @@ def run():
     df = df.sort_values(["win_rate", "expectancy"], ascending=False)
 
     # ==============================
-    # 📢 出力（TOP3）
+    # 出力
     # ==============================
-    msg = "🔥最終強化版：有望銘柄TOP3🔥\n"
+    msg = "🔥最強銘柄TOP3🔥\n"
 
     for _, row in df.head(3).iterrows():
 
