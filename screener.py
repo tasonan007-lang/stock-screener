@@ -32,7 +32,7 @@ MIN_WIN_RATE = 40
 MIN_EXPECTANCY = 1.2
 
 # ==============================
-# 📈 地合いフィルター（安定版）
+# 📈 地合い
 # ==============================
 def market_ok():
     try:
@@ -42,12 +42,8 @@ def market_ok():
             return False
 
         close = nikkei["Close"]
-
         if isinstance(close, pd.DataFrame):
             close = close.iloc[:, 0]
-
-        if len(close) < 2:
-            return False
 
         return float(close.iloc[-1]) > float(close.iloc[-2])
 
@@ -87,7 +83,6 @@ def backtest(hist):
                 break
 
     total = wins + losses
-
     if total == 0:
         return 0, 0, 0
 
@@ -166,14 +161,13 @@ def run():
             if not (MIN_PRICE <= price <= MAX_PRICE):
                 continue
 
-            # ===== ギャップ除外 =====
+            # ギャップ除外
             open_price = hist["Open"].iloc[-1]
             prev_close = hist["Close"].iloc[-2]
-
             if open_price > prev_close * 1.03:
                 continue
 
-            # ===== トレンド =====
+            # トレンド
             ma20 = hist["Close"].rolling(20).mean().iloc[-1]
             ma60 = hist["Close"].rolling(60).mean().iloc[-1]
 
@@ -183,7 +177,7 @@ def run():
             if not (price > ma20 > ma60):
                 continue
 
-            # ===== 出来高 =====
+            # 出来高
             vol_recent = hist["Volume"].iloc[-1]
             vol_prev = hist["Volume"].iloc[-2]
             vol_past = hist["Volume"].iloc[-60:-5].mean()
@@ -196,32 +190,34 @@ def run():
             if vol_prev < vol_past:
                 continue
 
-            # ==============================
-            # 🔥 ハイブリッド（ブレイク＋押し目）
-            # ==============================
+            # ===== ブレイク or 押し目 =====
             recent_high = hist["High"].rolling(20).max().iloc[-5]
-
             if pd.isna(recent_high):
                 continue
 
             high_ratio = price / recent_high
 
-            # ブレイク
             is_breakout = price > recent_high * 0.99
-
-            # 押し目
             pullback = abs(price - ma20) / ma20
             is_pullback = (price < recent_high and pullback < 0.03)
 
             if not (is_breakout or is_pullback):
                 continue
 
-            # ===== ATR =====
+            # ATR
             atr = (hist["High"] - hist["Low"]).rolling(14).mean().iloc[-1]
             atr_ratio = atr / price
 
             if not ai_filter(volume_ratio, high_ratio, atr_ratio):
                 continue
+
+            # ===== エントリータイプ＆価格 =====
+            if is_breakout:
+                entry_type = "ブレイク"
+                entry_price = price
+            else:
+                entry_type = "押し目"
+                entry_price = ma20 * 0.995
 
             # ===== バックテスト =====
             win_rate, expectancy, trades = backtest(hist)
@@ -238,6 +234,8 @@ def run():
             results.append({
                 "ticker": ticker,
                 "price": price,
+                "entry_type": entry_type,
+                "entry_price": entry_price,
                 "win_rate": win_rate,
                 "expectancy": expectancy,
                 "trades": trades
@@ -258,12 +256,11 @@ def run():
     # ==============================
     # 📢 出力
     # ==============================
-    msg = "🔥最強銘柄TOP3（ハイブリッド）🔥\n"
+    msg = "🔥最強銘柄TOP3🔥\n"
 
     for _, row in df.head(3).iterrows():
 
-        ticker = row["ticker"]
-        price = row["price"]
+        price = row["entry_price"]
 
         stop_price = price * 0.98
         take_profit = price * 1.05
@@ -281,8 +278,11 @@ def run():
 
         msg += f"""
 -----------------------------
-銘柄: {ticker}
-株価: {price:.1f}円
+銘柄: {row['ticker']}
+エントリー: {row['entry_type']}
+
+現在価格: {row['price']:.1f}円
+👉 エントリー価格: {row['entry_price']:.2f}円
 
 株数: {size}
 投資額: {int(investment)}円
