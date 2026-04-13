@@ -120,11 +120,14 @@ def run():
 
     print("地合いチェック中...")
 
-    if not market_ok():
-        msg = "⚠️ 地合いNG（トレード回避）"
+    market_is_good = market_ok()
+
+    if not market_is_good:
+        msg = "⚠️ 地合いNG（厳選モード）"
         print(msg)
         send_discord(msg)
-        return
+    else:
+        print("地合いOK（通常モード）")
 
     print("銘柄取得中...")
 
@@ -177,6 +180,11 @@ def run():
 
             if len(hist) < 60:
                 continue
+
+            # ===== 地合いNG時は強い銘柄だけ =====
+            if not market_is_good:
+                if not is_strong_stock(hist):
+                    continue
 
             price = hist["Close"].iloc[-1]
 
@@ -330,6 +338,33 @@ def run():
 
     print(msg)
     send_discord(msg)
+
+
+# ==============================
+# 💪 強い銘柄判定（追加）
+# ==============================
+def is_strong_stock(hist):
+    price = hist["Close"].iloc[-1]
+    ma20 = hist["Close"].rolling(20).mean().iloc[-1]
+    ma60 = hist["Close"].rolling(60).mean().iloc[-1]
+
+    if pd.isna(ma20) or pd.isna(ma60):
+        return False
+
+    vol_recent = hist["Volume"].iloc[-1]
+    vol_past = hist["Volume"].iloc[-60:-5].mean()
+
+    if pd.isna(vol_past) or vol_past == 0:
+        return False
+
+    volume_ratio = vol_recent / vol_past
+
+    # 強さ条件（トレンド＋出来高）
+    if price > ma20 > ma60 and volume_ratio > 1.5:
+        return True
+
+    return False
+
 
 # ==============================
 # 実行
